@@ -10,7 +10,9 @@ Optionally registers the dataset's category token ids in utils/force_tokens.json
 import argparse
 import json
 import os
+import random
 import re
+import shutil
 from collections import Counter
 
 TOKEN_RE = re.compile(r"\w+|[^\w\s]", re.UNICODE)
@@ -70,6 +72,21 @@ def update_force_tokens(force_tokens_path, dataset, categories, model_name_or_pa
     print(f"sentiment token ids (must match modeling_t5.py SP list): {sent_ids}")
 
 
+def make_ratio_split(full_dir, task_name, dataset, ratio, seed):
+    # repo convention: train subsampled, dev/test kept full
+    dst_dir = os.path.join("./data/ratio", task_name, f"{dataset}-ratio", str(ratio), f"seed{seed}")
+    os.makedirs(dst_dir, exist_ok=True)
+    with open(os.path.join(full_dir, "train.txt"), encoding="utf-8") as f:
+        lines = [l for l in f if l.strip()]
+    rng = random.Random(seed)
+    keep = sorted(rng.sample(range(len(lines)), max(1, int(len(lines) * ratio))))
+    with open(os.path.join(dst_dir, "train.txt"), "w", encoding="utf-8") as f:
+        f.writelines(lines[i] for i in keep)
+    for split in ["dev", "test"]:
+        shutil.copyfile(os.path.join(full_dir, f"{split}.txt"), os.path.join(dst_dir, f"{split}.txt"))
+    print(f"ratio={ratio}: train {len(keep)}/{len(lines)} lines -> {dst_dir}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--src_dir", default="./data/archive/converted_apc")
@@ -78,6 +95,9 @@ def main():
     parser.add_argument("--model_name_or_path", default=None,
                         help="If given, write category token ids into utils/force_tokens.json")
     parser.add_argument("--force_tokens_path", default="./utils/force_tokens.json")
+    parser.add_argument("--ratio", type=float, default=None,
+                        help="also create data/ratio/<task>/<dataset>-ratio/<ratio>/seed<seed>/ with subsampled train")
+    parser.add_argument("--seed", type=int, default=3407)
     args = parser.parse_args()
 
     dst_dir = os.path.join("./data", args.task_name, args.dataset)
@@ -98,6 +118,8 @@ def main():
     print(f"Add to utils/const.py cate list for '{args.dataset}': {categories}")
     if args.model_name_or_path:
         update_force_tokens(args.force_tokens_path, args.dataset, categories, args.model_name_or_path)
+    if args.ratio:
+        make_ratio_split(dst_dir, args.task_name, args.dataset, args.ratio, args.seed)
 
 
 if __name__ == "__main__":

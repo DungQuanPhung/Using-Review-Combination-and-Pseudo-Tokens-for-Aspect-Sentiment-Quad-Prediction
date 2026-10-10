@@ -37,6 +37,7 @@ class QwenArgs:
     adapter_path: Optional[str] = field(default=None, metadata={"help": "LoRA adapter dir to load when do_train=False"})
     task_name: str = "acos"
     dataset: str = "hotel"
+    ratio: float = field(default=-1, metadata={"help": "use data/ratio/<task>/<dataset>-ratio/<ratio>/seed<seed>/ (e.g. 0.1)"})
     output_dir: str = "./outputs/qwen/hotel"
     do_train: bool = True
     do_predict: bool = True
@@ -70,7 +71,10 @@ class QwenArgs:
     eval_strategy: str = field(default="epoch", metadata={"help": "epoch / no"})
 
     def __post_init__(self):
-        base = f"./data/{self.task_name}/{self.dataset}"
+        if self.ratio and self.ratio > 0:
+            base = f"./data/ratio/{self.task_name}/{self.dataset}-ratio/{self.ratio}/seed{self.seed}"
+        else:
+            base = f"./data/{self.task_name}/{self.dataset}"
         self.train_path = f"{base}/train.txt"
         self.valid_path = f"{base}/dev.txt"
         self.test_path = f"{base}/test.txt"
@@ -221,6 +225,7 @@ def main():
     model, tokenizer = load_model_and_tokenizer(args)
     run_info = {
         "model_name_or_path": args.model_name_or_path, "task_name": args.task_name, "dataset": args.dataset,
+        "ratio": args.ratio, "train_path": args.train_path,
         "mode": "lora_finetune" if args.do_train else ("adapter" if args.adapter_path else f"{args.n_shots}-shot"),
         "load_in_4bit": args.load_in_4bit, "lora_r": args.lora_r, "order": args.order, "seed": args.seed,
         "device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu",

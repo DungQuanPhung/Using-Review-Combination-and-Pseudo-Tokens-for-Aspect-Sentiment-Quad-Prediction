@@ -130,6 +130,9 @@ class DataTrainingArguments:
     max_samples: int = field(
         default=-1, metadata={"help": "use only the first N sentences of each split (smoke test); -1 = all"}
     )
+    max_eval_samples: int = field(
+        default=-1, metadata={"help": "use only the first N (paired) examples of dev/test; -1 = all"}
+    )
     output_json_path: Optional[str] = field(
         default=None, metadata={"help": "where to dump per-example gold/pred quads (set automatically)"}
     )

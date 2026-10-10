@@ -475,6 +475,10 @@ class ABSADataset(Dataset):
             """
             all_inputs, all_absa_labels, all_is_labels = get_transformed_io(
                 self.data_path, self.args)
+            max_eval = getattr(self.args, "max_eval_samples", -1)
+            if self.data_type != "train" and max_eval is not None and max_eval > 0:
+                all_inputs, all_absa_labels, all_is_labels = (
+                    all_inputs[:max_eval], all_absa_labels[:max_eval], all_is_labels[:max_eval])
             print("Data examples")
             for i in range(3):
                 print(all_inputs[i])
