@@ -1,6 +1,8 @@
+import json
 import logging
 import os
 import sys
+import time
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -9,14 +11,14 @@ import torch
 from transformers import Seq2SeqTrainingArguments, HfArgumentParser, AutoConfig, AutoTokenizer
 from transformers.trainer_utils import is_main_process, set_seed
 
-from models import T5ForConditionalGeneration, ABSAPrefixForConditionalGeneration
+from models import T5ForConditionalGeneration, ABSAPrefixForConditionalGeneration, IsABSAModel
 from trainer import MultiTaskTrainer
 from utils.data_utils_mix import ABSADataset
 # from utils.data_utils import ABSADataset
 from utils.eval_utils import parse_and_score
 
 logger = logging.getLogger(__name__)
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
@@ -66,6 +68,10 @@ class ModelArguments:
             "help": "Will use the token generated when running `transformers-cli login` (necessary to use this script "
                     "with private models)."
         },
+    )
+    checkpoint_path: Optional[str] = field(
+        default=None,
+        metadata={"help": "state_dict (.bin) to load when do_train=False; defaults to <output_dir>/pytorch_model.bin"},
     )
 
 
@@ -117,6 +123,15 @@ class DataTrainingArguments:
     )
     implicit_token: Optional[bool] = field(
         default=True, metadata={"help": "use implicit tokens"}
+    )
+    min_votes: int = field(
+        default=-1, metadata={"help": "a quad is kept if predicted by >= min_votes of the topk orders; -1 = all topk"}
+    )
+    max_samples: int = field(
+        default=-1, metadata={"help": "use only the first N sentences of each split (smoke test); -1 = all"}
+    )
+    output_json_path: Optional[str] = field(
+        default=None, metadata={"help": "where to dump per-example gold/pred quads (set automatically)"}
     )
 
     def __post_init__(self):
@@ -174,7 +189,9 @@ def main():
     #         json_file=os.path.abspath(sys.argv[1]))
     # else:
     #     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
-    model_args, data_args, training_args = parser.parse_json_file(json_file="./args.json")
+    model_args, data_args, training_args = parser.parse_json_file(
+        json_file=os.path.abspath(sys.argv[1]) if len(sys.argv) == 2 and sys.argv[1].endswith(".json") else "./args.json")
+    data_args.output_json_path = os.path.join(training_args.output_dir, "pred_quads.json")
     # print(f"model_args: {model_args}")
     # print(f"data_args: {data_args}")
     # print(f"training_args: {training_args}")
@@ -231,11 +248,12 @@ def main():
         t5_model=pretrained_model_t5,
         t5_encoder=pretrained_model_t5.encoder
     )
+    model = IsABSAModel(absa_prefix_model=model, t5_model=pretrained_model_t5)
 
     if not training_args.do_train:
-        logger.info("load checkpoint of IsABSAModel !")
-        # model.load_state_dict(torch.load(f"{training_args.output_dir}/checkpoint-6832/pytorch_model.bin"))
-        model.load_state_dict(torch.load(""))
+        ckpt = model_args.checkpoint_path or os.path.join(training_args.output_dir, "pytorch_model.bin")
+        logger.info(f"load checkpoint of IsABSAModel from {ckpt}")
+        model.load_state_dict(torch.load(ckpt, map_location="cpu"))
 
     train_dataset = ABSADataset(tokenizer_t5=tokenizer_t5,
                                 data_path=data_args.train_path,
@@ -282,9 +300,31 @@ def main():
         compute_metrics=compute_metrics if training_args.predict_with_generate else None
     )
 
+    run_info = {
+        "task_name": data_args.task_name,
+        "dataset": data_args.dataset,
+        "model_name_or_path": model_args.model_name_or_path,
+        "n_params": sum(p.numel() for p in model.parameters()),
+        "n_train_examples": len(train_dataset),
+        "n_test_examples": len(test_dataset),
+        "topk": data_args.topk,
+        "min_votes": data_args.min_votes,
+        "constraint_decoding": training_args.constraint_decoding,
+        "seed": training_args.seed,
+        "device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu",
+    }
+
     if training_args.do_train:
         checkpoint = None
+        train_start = time.perf_counter()
         train_result = trainer.train(resume_from_checkpoint=checkpoint)
+        train_time = time.perf_counter() - train_start
+        train_result.metrics["train_time_sec"] = round(train_time, 2)
+        train_result.metrics["train_time_hms"] = time.strftime("%H:%M:%S", time.gmtime(train_time))
+        if torch.cuda.is_available():
+            train_result.metrics["train_peak_gpu_mem_gb"] = round(torch.cuda.max_memory_allocated() / 1024 ** 3, 3)
+        run_info.update(train_result.metrics)
+        trainer.save_model()
 
         output_train_file = os.path.join(
             training_args.output_dir, "train_results.txt")
@@ -302,6 +342,7 @@ def main():
     if training_args.do_predict:
         data_args.max_length = 1024
         logger.info(f"*** Test constraint decoding: {training_args.constraint_decoding}***")
+        predict_start = time.perf_counter()
         test_results = trainer.predict(
             test_dataset,
             metric_key_prefix="test",
@@ -309,6 +350,7 @@ def main():
             num_beams=data_args.num_beams,
             constraint_decoding=training_args.constraint_decoding,
         )
+        predict_time = time.perf_counter() - predict_start
         # with open("./slgm-rest14-46.txt", 'w', encoding='utf-8') as f:
         #     for idx, prediction in enumerate(test_results.predictions):
         #         decoded_text = tokenizer.decode(prediction, skip_special_tokens=True)
@@ -316,6 +358,8 @@ def main():
         #         f.write(decoded_text + '\n')
         test_metrics = test_results.metrics
         test_metrics["test_loss"] = round(test_metrics["test_loss"], 4)
+        test_metrics["test_predict_time_sec"] = round(predict_time, 2)
+        run_info.update(test_metrics)
         output_test_result_file = os.path.join(training_args.output_dir, "test_results_seq2seq.txt")
         if trainer.is_world_process_zero():
             with open(output_test_result_file, "w") as writer:
@@ -323,6 +367,11 @@ def main():
                 for key, value in sorted(test_metrics.items()):
                     logger.info(f"{key} = {value}")
                     writer.write(f"{key} = {value}\n")
+
+    if trainer.is_world_process_zero():
+        os.makedirs(training_args.output_dir, exist_ok=True)
+        with open(os.path.join(training_args.output_dir, "run_summary.json"), "w", encoding="utf-8") as f:
+            json.dump(run_info, f, indent=2, ensure_ascii=False)
 
 
 if __name__ == "__main__":

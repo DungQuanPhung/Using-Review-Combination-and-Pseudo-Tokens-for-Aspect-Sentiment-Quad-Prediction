@@ -1822,6 +1822,10 @@ class T5ForConditionalGeneration(T5PreTrainedModel):
             constraint_utils=constraint_utils
         )
 
+    def _validate_model_kwargs(self, model_kwargs):
+        # transformers>=4.21 rejects custom generate() kwargs (constraint_decoding, is_labels, dataset)
+        return
+
     def _prepare_encoder_decoder_kwargs_for_generation(
             self, inputs_tensor: torch.Tensor, model_kwargs, model_input_name: Optional[str] = None
     ) -> Dict[str, Any]:

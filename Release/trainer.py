@@ -15,8 +15,9 @@ class MultiTaskTrainer(Seq2SeqTrainer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._constraint_decoding = self.args.constraint_decoding
-        self._max_length = 256
-        self._num_beams = 4
+        # used by evaluate() during training; override via generation_max_length / generation_num_beams
+        self._max_length = self.args.generation_max_length or 256
+        self._num_beams = self.args.generation_num_beams or 4
 
     def compute_loss(self, model, inputs, return_outputs=False):
         # Split inputs for the two tasks
@@ -374,7 +375,7 @@ class MultiTaskTrainer(Seq2SeqTrainer):
         # g.manual_seed(self.args.seed)
         return DataLoader(self.train_dataset,
                           batch_size=self.args.train_batch_size,
-                          num_workers=4,
+                          num_workers=self.args.dataloader_num_workers,
                           drop_last=drop_last,
                           collate_fn=collate_func_train,
                           # shuffle=True,
@@ -394,7 +395,7 @@ class MultiTaskTrainer(Seq2SeqTrainer):
         eval_dataset = eval_dataset if eval_dataset is not None else self.eval_dataset
         return DataLoader(eval_dataset,
                           batch_size=self.args.eval_batch_size,
-                          num_workers=4,
+                          num_workers=self.args.dataloader_num_workers,
                           collate_fn=collate_func_eval,
                           pin_memory=True)
 
@@ -410,6 +411,6 @@ class MultiTaskTrainer(Seq2SeqTrainer):
         test_dataset = test_dataset if test_dataset is not None else self.test_dataset
         return DataLoader(test_dataset,
                           batch_size=self.args.eval_batch_size,
-                          num_workers=4,
+                          num_workers=self.args.dataloader_num_workers,
                           collate_fn=collate_func_eval,
                           pin_memory=True)

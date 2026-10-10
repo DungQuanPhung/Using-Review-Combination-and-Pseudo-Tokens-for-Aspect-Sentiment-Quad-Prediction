@@ -1,5 +1,6 @@
 from utils.parse_utils import parse_aste
 import json
+import os
 
 
 def parse_and_score(pred, target, data_args):
@@ -13,8 +14,9 @@ def parse_and_score(pred, target, data_args):
     # if target_format == "AO":
     #     all_preds = distance_aware_merge_preds(all_preds)
     #     all_labels = all_labels[: int(len(all_labels) / 2)]
-    all_preds = distance_aware_merge_preds(all_preds, data_args.topk)
-    all_labels = distance_aware_merge_preds(all_labels, data_args.topk)
+    min_votes = getattr(data_args, "min_votes", -1)
+    all_preds = distance_aware_merge_preds(all_preds, data_args.topk, min_votes)
+    all_labels = distance_aware_merge_preds(all_labels, data_args.topk, min_votes)
     raw_score = score(all_preds, all_labels, data_args)
     return raw_score
 
@@ -40,7 +42,11 @@ def parse_and_score(pred, target, data_args):
 #         merged_preds.append(pred)
 #     return merged_preds
 
-def distance_aware_merge_preds(preds, top_K):
+def distance_aware_merge_preds(preds, top_K, min_votes=-1):
+    # original release hard-coded `count > 14` (unanimous vote for topk=15)
+    if min_votes is None or min_votes <= 0:
+        min_votes = top_K
+    min_votes = min(min_votes, top_K)
     group_size = top_K
     grouped_preds = [preds[i:i + group_size] for i in range(0, len(preds), group_size)]
     merged_preds = []
@@ -67,8 +73,7 @@ def distance_aware_merge_preds(preds, top_K):
             for tuple_item in unique_tuples:
                 tuple_counts[tuple_item] = tuple_counts.get(tuple_item, 0) + 1
         for tuple_item, count in tuple_counts.items():
-            # if count > top_K//2:
-            if count > 14:
+            if count >= min_votes:
                 intersection.append(tuple_item)
         merged_preds.append(intersection)
         # merged_preds.append(list(intersection))
@@ -96,37 +101,82 @@ def distance_aware_merge_preds(preds, top_K):
 #             "n_preds": n_preds, "n_labels": n_labels, "n_common": n_common}
 
 
+def _prf(n_common, n_preds, n_labels):
+    precision = n_common / n_preds if n_preds > 0 else 0.0
+    recall = n_common / n_labels if n_labels > 0 else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+    return precision, recall, f1
+
+
+def _quad_type(quad):
+    # quad = (aspect, category, sentiment, opinion); 'null' marks implicit
+    if len(quad) < 4:
+        return "other"
+    a_imp = quad[0] == "null"
+    o_imp = quad[3] == "null"
+    if not a_imp and not o_imp:
+        return "EA_EO"
+    if a_imp and not o_imp:
+        return "IA_EO"
+    if not a_imp and o_imp:
+        return "EA_IO"
+    return "IA_IO"
+
+
 def score(all_preds, all_labels, data_args):
     assert len(all_preds) == len(all_labels)
     n_preds, n_labels, n_common = 0, 0, 0
-    json_data = {"rest16": [], "result": {}}
+    types = ["EA_EO", "IA_EO", "EA_IO", "IA_IO"]
+    type_counts = {t: {"n_preds": 0, "n_labels": 0, "n_common": 0} for t in types}
+    json_data = {"examples": [], "result": {}}
 
     for pred, label in zip(all_preds, all_labels):
         is_exist = 0
         n_preds += len(pred)
         n_labels += len(label)
+        for q in pred:
+            t = _quad_type(q)
+            if t in type_counts:
+                type_counts[t]["n_preds"] += 1
+        for q in label:
+            t = _quad_type(q)
+            if t in type_counts:
+                type_counts[t]["n_labels"] += 1
         label_dup = label.copy()
         for p in pred:
             if p in label_dup:
                 n_common += 1
                 is_exist = 1
                 label_dup.remove(p)
+                t = _quad_type(p)
+                if t in type_counts:
+                    type_counts[t]["n_common"] += 1
         info_dict = {
             "labels": label,
             "preds": pred,
             "isExist": is_exist
         }
-        json_data['rest16'].append(info_dict)
+        json_data['examples'].append(info_dict)
 
-    precision = n_common / n_preds
-    recall = n_common / n_labels
-    f1_score = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
-    json_data['result'] = {'precision': precision, "recall": recall, "f1_score": f1_score,
-                           "n_preds": n_preds, "n_labels": n_labels, "n_common": n_common}
-    with open(
-            f"./outputs_json/acos_rest16_seed3407_epoch20_bts16_lr1e-4_vt-True_it-True_ct-front_topk15_combined-True.json",
-            'w',
-            encoding='utf-8') as f:
-        json.dump(json_data, f, ensure_ascii=False, indent=2)
-    return {'precision': precision, "recall": recall, "f1_score": f1_score,
-            "n_preds": n_preds, "n_labels": n_labels, "n_common": n_common}
+    precision, recall, f1_score = _prf(n_common, n_preds, n_labels)
+    result = {'precision': precision, "recall": recall, "f1_score": f1_score,
+              "n_preds": n_preds, "n_labels": n_labels, "n_common": n_common}
+    for t in types:
+        c = type_counts[t]
+        p_t, r_t, f_t = _prf(c["n_common"], c["n_preds"], c["n_labels"])
+        result[f"{t}_f1"] = f_t
+        result[f"{t}_n_labels"] = c["n_labels"]
+    # implicit-aspect / implicit-opinion aggregates
+    for name, members in (("IA", ["IA_EO", "IA_IO"]), ("IO", ["EA_IO", "IA_IO"])):
+        nc = sum(type_counts[m]["n_common"] for m in members)
+        npd = sum(type_counts[m]["n_preds"] for m in members)
+        nl = sum(type_counts[m]["n_labels"] for m in members)
+        result[f"{name}_f1"] = _prf(nc, npd, nl)[2]
+
+    json_data['result'] = result
+    output_json_path = getattr(data_args, "output_json_path", None)
+    if output_json_path:
+        os.makedirs(os.path.dirname(output_json_path) or ".", exist_ok=True)
+        with open(output_json_path, 'w', encoding='utf-8') as f:
+            json.dump(json_data, f, ensure_ascii=False, indent=2)
+    return result

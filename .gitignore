@@ -1,0 +1,16 @@
+# python
+__pycache__/
+*.pyc
+
+# experiment artifacts
+Release/outputs/
+Release/outputs_json/
+Release/*.log
+*.bin
+*.safetensors
+*.pt
+
+# env
+.venv/
+venv/
+.env

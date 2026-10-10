@@ -61,6 +61,11 @@ laptop_aspect_cate_list = [
     'laptop price'
 ]
 
+# data/archive/converted_apc (hotel reviews), lowercased
+hotel_aspect_cate_list = [
+    'amenity', 'branding', 'experience', 'facility', 'loyalty', 'service'
+]
+
 with open("./utils/force_tokens.json", 'r') as f:
     force_tokens = json.load(f)
 
@@ -70,7 +75,8 @@ cate_list = {
     "rest": rest_aspect_cate_list,
     "rest16": rest_aspect_cate_list,
     "laptop": laptop_aspect_cate_list,
-    "laptop14": laptop_aspect_cate_list
+    "laptop14": laptop_aspect_cate_list,
+    "hotel": hotel_aspect_cate_list,
 }
 
 task_data_list = {
@@ -93,6 +99,7 @@ force_words = {
     'acos': {
         "rest": rest_aspect_cate_list + list(sentword2opinion.values()) + ['[SSEP]'],
         "laptop": laptop_aspect_cate_list + list(sentword2opinion.values()) + ['[SSEP]'],
+        "hotel": hotel_aspect_cate_list + list(sentword2opinion.values()) + ['[SSEP]'],
     },
     'asqp': {
         "rest15": rest_aspect_cate_list + list(sentword2opinion.values()) + ['[SSEP]'],
@@ -163,6 +170,20 @@ optim_orders_all = {
             '[S] [A] [C] [O]', '[S] [C] [A] [O]'
         ],
         "rest16": [  # ot null -> sp
+            '[A] [O] [S] [C]', '[A] [O] [C] [S]',
+            '[A] [S] [O] [C]', '[O] [A] [C] [S]',
+            '[O] [A] [S] [C]', '[O] [S] [C] [A]',
+            '[A] [C] [O] [S]', '[O] [C] [A] [S]',
+            '[O] [S] [A] [C]', '[A] [S] [C] [O]',
+            '[A] [C] [S] [O]', '[O] [C] [S] [A]',
+            '[C] [O] [A] [S]', '[C] [A] [O] [S]',
+            '[C] [S] [O] [A]', '[C] [O] [S] [A]',
+            '[S] [A] [O] [C]', '[C] [S] [A] [O]',
+            '[C] [A] [S] [O]', '[S] [O] [A] [C]',
+            '[S] [C] [O] [A]', '[S] [O] [C] [A]',
+            '[S] [C] [A] [O]', '[S] [A] [C] [O]'
+        ],
+        "hotel": [  # no order search done for this dataset; reuse rest16 order
             '[A] [O] [S] [C]', '[A] [O] [C] [S]',
             '[A] [S] [O] [C]', '[O] [A] [C] [S]',
             '[O] [A] [S] [C]', '[O] [S] [C] [A]',

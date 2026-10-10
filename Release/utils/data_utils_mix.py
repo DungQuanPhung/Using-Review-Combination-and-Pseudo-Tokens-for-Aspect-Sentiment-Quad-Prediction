@@ -340,6 +340,9 @@ def get_transformed_io(data_path, args):
     else:
         sents, absa_labels, is_labels = read_line_examples_from_file(data_path, lowercase=args.lowercase)
 
+    max_samples = getattr(args, "max_samples", -1)
+    if max_samples is not None and max_samples > 0:
+        sents, absa_labels, is_labels = sents[:max_samples], absa_labels[:max_samples], is_labels[:max_samples]
     return sents, absa_labels, is_labels
 
 
@@ -439,7 +442,7 @@ class ABSADataset(Dataset):
         self.is_labels = []
         self.sents = []
 
-        self._build_examples(args.is_pre_seq_len)
+        self._build_examples()
 
     def __getitem__(self, index):
         input_ids_t5 = self.inputs_t5[index]["input_ids"].squeeze()
@@ -463,7 +466,7 @@ class ABSADataset(Dataset):
     def __len__(self):
         return len(self.inputs_t5)
 
-    def _build_examples(self, is_pre_seq_len):
+    def _build_examples(self):
         if self.args.full_supervise:
             """
             all_inputs：句子
@@ -482,12 +485,11 @@ class ABSADataset(Dataset):
 
             for i in range(len(all_inputs)):
                 if self.combined:
-                    self._get_tokenized_combined(all_inputs[i], all_absa_labels[i], all_is_labels[i],
-                                                 is_prompt_tokenized)
+                    self._get_tokenized_combined(all_inputs[i], all_absa_labels[i], all_is_labels[i])
                 else:
-                    self._get_tokenized_multi(all_inputs[i], all_absa_labels[i], all_is_labels[i], is_prompt_tokenized)
+                    self._get_tokenized_multi(all_inputs[i], all_absa_labels[i], all_is_labels[i])
 
-    def _get_tokenized_combined(self, words, absa_label, is_label, is_prompt_tokenized):
+    def _get_tokenized_combined(self, words, absa_label, is_label):
         permutations = optim_orders_all[self.task_name][self.data_name][:self.topk]
         order2token_implicit = {"[A]": "<implicit_vtoken_a>", "[C]": "<implicit_vtoken_c>",
                                 "[S]": "<implicit_vtoken_s>", "[O]": "<implicit_vtoken_o>"}
@@ -596,8 +598,6 @@ class ABSADataset(Dataset):
 
             absa_labels_seq = ABSA_format(absa_labels_seq)
 
-            absa_prompt_len = self.args.absa_pre_seq_len
-
             tokenized_input_t5 = self.tokenizer_t5.batch_encode_plus(
                 [input_seq],
                 max_length=self.args.max_length * 2,
@@ -615,18 +615,11 @@ class ABSADataset(Dataset):
                 truncation=True,
                 return_tensors="pt")
 
-            tokenized_absa_prompt = self.tokenizer_t5.batch_encode_plus(
-                [absa_prompt],
-                max_length=absa_prompt_len,
-                padding="max_length",
-                truncation=True,
-                return_tensors="pt")
-
             self.inputs_t5.append(tokenized_input_t5)
 
             self.absa_labels.append(tokenized_absa_label)
 
-    def _get_tokenized(self, words, absa_label, is_label, is_prompt_tokenized):
+    def _get_tokenized(self, words, absa_label, is_label):
         self.sents.append(' '.join(words))
         absa_labels_seq = absa_label
         self.is_labels.append(is_label)
@@ -637,8 +630,6 @@ class ABSADataset(Dataset):
             input_seq = "[O] <explicit_vtoken1> [C] <explicit_vtoken2> [S] <explicit_vtoken3> [A] <explicit_vtoken4> " + ' '.join(
                 words)
         absa_labels_seq = ABSA_format(absa_labels_seq)
-        absa_prompt = self.absa_prompt[12]
-        absa_prompt_len = self.args.absa_pre_seq_len
         tokenized_input_t5 = self.tokenizer_t5.batch_encode_plus(
             [input_seq],
             max_length=self.args.max_length * 2,
@@ -660,7 +651,7 @@ class ABSADataset(Dataset):
         self.absa_labels.append(tokenized_absa_label)
         # self.is_labels.append(is_label_classification)
 
-    def _get_tokenized_multi(self, words, absa_label, is_label, is_prompt_tokenized):
+    def _get_tokenized_multi(self, words, absa_label, is_label):
         permutations = optim_orders_all[self.task_name][self.data_name][:self.topk]
         order2token_implicit = {"[A]": "<implicit_vtoken_a>", "[C]": "<implicit_vtoken_c>",
                                 "[S]": "<implicit_vtoken_s>", "[O]": "<implicit_vtoken_o>"}
